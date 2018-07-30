@@ -1,0 +1,18 @@
+[Install]
+WantedBy=multi-user.target
+
+[Unit]
+Description=SMPP client on Python3
+After=syslog.target
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/SMPP/
+ExecStart=/usr/bin/python3 /opt/SMPP/my_rx.py
+RestartSec=5
+Restart=always
+ 
+[Install]
+WantedBy=multi-user.target

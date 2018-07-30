@@ -263,16 +263,20 @@ class Client(object):
 
     @staticmethod
     def message_received_handler(pdu, **kwargs):
-        """Custom handler to process received message. May be overridden"""
-
-        logger.warning('Message received handler (Override me)')
+#  RECEIVER
+#        """Custom handler to process received message. May be overridden"""
+#        logger.warning('Message received handler (Override me)')
+        sms=pdu.short_message.decode("cp1251")
+        sender=pdu.source_addr.decode("cp1251")
+        from . import my_lib
+        my_lib.get_data(sms,sender)
 
     @staticmethod
     def message_sent_handler(pdu, **kwargs):
         """Called when SMPP server accept message (SUBMIT_SM_RESP).
         May be overridden"""
-        logger.warning('Message sent handler (Override me)')
-
+#        logger.warning('Message sent handler (Override me)')
+        logger.warning('Message sent success')
 
     def read_once(self, ignore_error_codes=None):
         """Read a PDU and act"""
