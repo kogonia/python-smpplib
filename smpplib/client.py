@@ -268,8 +268,11 @@ class Client(object):
 #        logger.warning('Message received handler (Override me)')
         sms=pdu.short_message.decode("cp1251")
         sender=pdu.source_addr.decode("cp1251")
-        from . import my_lib
-        my_lib.get_data(sms,sender)
+        import time
+        fname = time.strftime("%d-%m-%Y_%T")+"_"+sender
+        f = open("/var/log/smpp/%s.log" % fname, "a")
+        f.write(sms)
+        f.close()
 
     @staticmethod
     def message_sent_handler(pdu, **kwargs):

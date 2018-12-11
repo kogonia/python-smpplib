@@ -1,4 +1,4 @@
-sms_host = 'sms-server_ip'
-sms_port = sms-server_port
-sms_pass = 'smpp-client_pass'
-sms_id = 'smpp-client_id'
+sms_host = '192.168.0.1'
+sms_port = 2020
+sms_pass = ''
+sms_id = ''

@@ -1,0 +1,10 @@
+/var/log/smpp/*.log
+{
+    weekly
+    missingok
+    rotate 8
+    dateext
+    compress
+    create 0766 root root
+}
+
