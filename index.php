@@ -12,7 +12,12 @@ $file  = file_get_contents('phone_list.txt');
 
 $form = "
         <form name='sms_form' action='' method='POST'>
+            Осталось <b><msg_len></msg_len></b> / 134 (рекомендованный максимум символов)<br />
             <textarea name='sms_text' cols='40' rows='10' placeholder='Текст сообщения вводить сюда :)' autofocus></textarea>
+            <script type='text/javascript'>
+                document.querySelector('textarea').addEventListener('input', function (e) {
+                    document.querySelector('msg_len').textContent = 134 - e.target.value.length})
+            </script>
             <textarea name='phone_list' cols='14' rows='10' placeholder='Номера здесь'>".$file."</textarea><br />
             <button type='submit' name='send' value='Submit'>Отправить</button>
         </form>";
