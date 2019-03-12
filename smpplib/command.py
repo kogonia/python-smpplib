@@ -24,12 +24,12 @@
 
 import struct
 import logging
-import six
 
 from . import pdu
 from . import exceptions
 from . import consts
 from .ptypes import ostr, flag
+import collections
 
 logger = logging.getLogger('smpplib.command')
 
@@ -56,7 +56,6 @@ def factory(command_name, **kwargs):
             'unbind_resp': UnbindResp,
             'enquire_link': EnquireLink,
             'enquire_link_resp': EnquireLinkResp,
-            'alert_notification': AlertNotification,
         }[command_name](command_name, **kwargs)
     except KeyError:
         raise exceptions.UnknownCommandError(
@@ -67,7 +66,7 @@ def get_optional_name(code):
     """Return optional_params name by given code. If code is unknown, raise
     UnkownCommandError exception"""
 
-    for key, value in six.iteritems(consts.OPTIONAL_PARAMS):
+    for key, value in consts.OPTIONAL_PARAMS.items():
         if value == code:
             return key
 
@@ -114,17 +113,17 @@ class Command(pdu.PDU):
 
     def _set_vars(self, **kwargs):
         """set attributes accordingly to kwargs"""
-        for key, value in six.iteritems(kwargs):
+        for key, value in kwargs.items():
             if not hasattr(self, key) or getattr(self, key) is None:
                 setattr(self, key, value)
 
     def generate_params(self):
         """Generate binary data from the object"""
 
-        if hasattr(self, 'prep') and callable(self.prep):
+        if hasattr(self, 'prep') and isinstance(self.prep, collections.Callable):
             self.prep()
 
-        body = consts.EMPTY_STRING
+        body = b''
 
         for field in self.params_order:
             #print field
@@ -153,7 +152,10 @@ class Command(pdu.PDU):
                 elif param.type is ostr:
                     value = self._generate_ostring(field)
                     if value:
-                        body += value
+                        if isinstance(value, bytes):
+                            body += value
+                        else:
+                            body += value.encode('utf8')
             #print value
         return body
 
@@ -168,29 +170,31 @@ class Command(pdu.PDU):
         fmt = self._pack_format(field)
         data = getattr(self, field)
         if data:
-            return struct.pack(">" + fmt, data)
+            return struct.pack(fmt, data)
         else:
-            return consts.NULL_STRING
+            return bytes([0])  # null terminator
 
     def _generate_string(self, field):
         """Generate string value"""
 
         field_value = getattr(self, field)
+        if field_value:
+            field_value=field_value.encode('utf8')#kiradd
 
         if hasattr(self.params[field], 'size'):
             size = self.params[field].size
-            value = field_value.ljust(size, chr(0))
+            value = field_value.ljust(size, bytes([0]))
         elif hasattr(self.params[field], 'max'):
             if len(field_value or '') > self.params[field].max:
                 field_value = field_value[0:self.params[field].max - 1]
 
             if field_value:
-                value = field_value + chr(0)
+                value = field_value + bytes([0])
             else:
-                value = chr(0)
+                value = bytes([0])
 
         setattr(self, field, field_value)
-        return six.b(value)
+        return value
 
     def _generate_ostring(self, field):
         """Generate octet string value (no null terminator)"""
@@ -268,8 +272,9 @@ class Command(pdu.PDU):
         Return (data, pos) tuple."""
 
         size = self.params[field].size
-        fmt = self._pack_format(field)
-        unpacked_data = struct.unpack(">" + fmt, data[pos:pos + size])
+        field_value = getattr(self, field)
+        unpacked_data = self._unpack(self._pack_format(field),
+            data[pos:pos + size])
         field_value = ''.join(map(str, unpacked_data))
         setattr(self, field, field_value)
         pos += size
@@ -280,7 +285,7 @@ class Command(pdu.PDU):
         """Parse variable-length string from a PDU.
         Return (data, pos) tuple."""
 
-        end = data.find(consts.NULL_STRING, pos)
+        end = data.find(bytes([0]), pos)
         length = end - pos
 
         field_value = data[pos:pos + length]
@@ -874,52 +879,3 @@ class EnquireLinkResp(Command):
         """Initialize"""
         super(EnquireLinkResp, self).__init__(command, need_sequence=False,
             **kwargs)
-
-class AlertNotification(Command):
-    """alert_notification command class
-    """
-
-
-    # Type of Number for source address
-    source_addr_ton = None
-
-    # Numbering Plan Indicator for source address
-    source_addr_npi = None
-
-    # Address of SME which originated this message
-    source_addr = None
-
-    # TON for destination
-    esme_addr_ton = None
-
-    # NPI for destination
-    esme_addr_npi = None
-
-    # Destination address for this message
-    esme_addr = None
-
-    # Optional are taken from params list and are set dynamically when
-    # __init__ is called.
-    params = {
-        'source_addr_ton': Param(type=int, size=1),
-        'source_addr_npi': Param(type=int, size=1),
-        'source_addr': Param(type=str, max=21),
-        'esme_addr_ton': Param(type=int, size=1),
-        'esme_addr_npi': Param(type=int, size=1),
-        'esme_addr': Param(type=str, max=21),
-
-        # Optional params
-        'ms_availability_status' : Param(type=int, size=1),
-    }
-
-    params_order = ('source_addr_ton', 'source_addr_npi',
-        'source_addr', 'esme_addr_ton', 'esme_addr_npi',
-        'esme_addr',
-
-        # Optional params
-        'ms_availability_status')
-
-    def __init__(self, command, **kwargs):
-        """Initialize"""
-        super(AlertNotification, self).__init__(command, **kwargs)
-        self._set_vars(**(dict.fromkeys(self.params)))

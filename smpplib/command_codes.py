@@ -1,4 +1,3 @@
-import six
 from . import exceptions
 
 #
@@ -31,7 +30,8 @@ commands = {
     'submit_multi_resp': 0x80000021,
     'alert_notification': 0x00000102,
     'data_sm': 0x00000103,
-    'data_sm_resp': 0x80000103
+    'data_sm_resp': 0x80000103,
+    'tele2_in': 0x30303562
 }
 
 
@@ -39,7 +39,7 @@ def get_command_name(code):
     """Return command name by given code. If code is unknown, raise
     UnkownCommandError exception"""
 
-    for key, value in six.iteritems(commands):
+    for key, value in commands.items():
         if value == code:
             return key
 

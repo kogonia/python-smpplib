@@ -26,11 +26,13 @@ import binascii
 import logging
 import socket
 import struct
-import threading
 
 from . import consts
 from . import exceptions
 from . import smpp
+from threading import Event
+from queue import Queue, Empty
+import time
 
 logger = logging.getLogger('smpplib.client')
 
@@ -65,16 +67,38 @@ class Client(object):
     _socket = None
     sequence_generator = None
 
-    def __init__(self, host, port, timeout=5, sequence_generator=None):
-        """Initialize"""
+    def stop(self):
+        self.stop_flag.set()
 
+    def set_pause(self):
+        # set messages to fail
+        while not self.pdu_queue.empty():
+            try:
+                mid, pdu = self.pdu_queue.get(timeout=0.01)
+                if self.message_fail_handler:
+                    self.message_fail_handler(f"clenup", mid, 0)
+            except Empty:
+                pass
+        # clear queue from messages
+
+        self.pause = time.time() + self.pause_time
+
+    def __init__(self, host, port, timeout=5, sequence_generator=None,
+                 pause_time=90, enqire_time=60):
+        """Initialize"""
+        self.stop_flag = Event()
+        self.pause = time.time()
+        self.pause_time = pause_time
+        self.enqire_time = enqire_time
         self.host = host
-        self.lock = threading.Lock()
         self.port = int(port)
+        self.pdu_queue = Queue()
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.settimeout(timeout)
         self.receiver_mode = False
         self.message_source = None
+        self.message_fail_handler = None
+        self.last_message_time = None
         if sequence_generator is None:
             sequence_generator = SimpleSequenceGenerator()
         self.sequence_generator = sequence_generator
@@ -102,16 +126,7 @@ class Client(object):
         """Set new function generate messages message sent event"""
         self.message_source = func
 
-    def SendMessages(self):
-        self.lock.acquire()
-        if self.message_source:
-            messages = self.message_source()
-            if messages:
-                for sphone, dphone, message in messages:
-                    self.sendMessage(sphone, dphone, message)
-        self.lock.release()
-
-    def sendMessage(self, sphone, tphone, message, op='tele2'):
+    def genMessagePDUs(self, sphone, tphone, message):
         from . import gsm
         cfg = dict()
 
@@ -122,7 +137,55 @@ class Client(object):
             cfg['dest_addr_ton'] = consts.SMPP_TON_INTL
             cfg['dest_addr_npi'] = consts.SMPP_NPI_ISDN
         else:
-            cfg['source_addr_ton'] = 5  # consts.SMPP_TON_UNK
+            if len(sphone) > 4:
+                cfg['source_addr_ton'] = consts.SMPP_TON_INTL
+                cfg['source_addr_npi'] = consts.SMPP_NPI_ISDN
+            else:
+                cfg['source_addr_ton'] = consts.SMPP_TON_UNK
+                cfg['source_addr_npi'] = consts.SMPP_NPI_ISDN
+
+            if len(tphone) > 4:
+                cfg['dest_addr_ton'] = consts.SMPP_TON_INTL
+                cfg['dest_addr_npi'] = consts.SMPP_NPI_ISDN
+            else:
+                cfg['dest_addr_ton'] = consts.SMPP_TON_UNK
+                cfg['dest_addr_npi'] = consts.SMPP_NPI_ISDN
+
+        try:
+            parts, encoding_flag, msg_type_flag = gsm.make_parts(message)
+            pdu_list = []
+            for part in parts:
+                pdu = smpp.make_pdu('submit_sm', client=self,
+                                    source_addr_ton=cfg['source_addr_ton'],
+                                    source_addr_npi=cfg['source_addr_npi'],
+                                    source_addr=sphone,
+                                    dest_addr_ton=cfg['dest_addr_ton'],
+                                    dest_addr_npi=cfg['dest_addr_npi'],
+                                    destination_addr=tphone,
+                                    short_message=part,
+                                    data_coding=encoding_flag,
+                                    esm_class=msg_type_flag,
+                                    registered_delivery=True,
+                                    )
+                pdu_list.append(pdu)
+
+            return pdu_list
+
+        except Exception as e:
+            logging.error(e)
+
+    def sendMessage(self, sphone, tphone, message):
+        from . import gsm
+        cfg = dict()
+
+        nonums = "".join(filter(lambda x: not x.isdigit(), sphone))
+        if len(nonums) > 0:
+            cfg['source_addr_ton'] = consts.SMPP_TON_ALNUM
+            cfg['source_addr_npi'] = consts.SMPP_NPI_UNK
+            cfg['dest_addr_ton'] = consts.SMPP_TON_INTL
+            cfg['dest_addr_npi'] = consts.SMPP_NPI_ISDN
+        else:
+            cfg['source_addr_ton'] = 1  # consts.SMPP_TON_UNK
             cfg['source_addr_npi'] = 0  # consts.SMPP_NPI_ISDN
             cfg['dest_addr_ton'] = 1  # consts.SMPP_TON_INTL
             cfg['dest_addr_npi'] = 1  # consts.SMPP_NPI_ISDN
@@ -153,7 +216,8 @@ class Client(object):
 
         try:
             if self._socket is None:
-                self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self._socket = socket.socket(socket.AF_INET,
+                                             socket.SOCK_STREAM)
             self._socket.connect((self.host, self.port))
             self.state = consts.SMPP_CLIENT_STATE_OPEN
         except socket.error:
@@ -268,7 +332,8 @@ class Client(object):
         raw_pdu = self._socket.recv(length - 4)
         raw_pdu = raw_len + raw_pdu
 
-        logger.debug('<<%s (%d bytes)', binascii.b2a_hex(raw_pdu), len(raw_pdu))
+        logger.debug('<<%s (%d bytes)', binascii.b2a_hex(raw_pdu),
+                     len(raw_pdu))
 
         p = smpp.parse_pdu(raw_pdu, client=self)
         logger.debug('Read %s PDU', p.command)
@@ -311,36 +376,69 @@ class Client(object):
         """Set new function to handle message sent event"""
         self.message_sent_handler = func
 
+    def set_message_fail_handler(self, func):
+        """Set new function to handle message sent event"""
+        self.message_fail_handler = func
+
     @staticmethod
     def message_received_handler(pdu, **kwargs):
-#  RECEIVER
-#        """Custom handler to process received message. May be overridden"""
-#        logger.warning('Message received handler (Override me)')
-        sms=pdu.short_message.decode("cp1251")
-        sender=pdu.source_addr.decode("cp1251")
-        import time
-        fname = time.strftime("%d-%m-%Y_%T")+"_"+sender
-        f = open("/var/log/smpp/%s.log" % fname, "a")
-        f.write(sms)
-        f.close()
-        
+        """Custom handler to process received message. May be overridden"""
+
+        logger.warning('Message received handler (Override me)')
+
     @staticmethod
     def message_sent_handler(pdu, **kwargs):
         """Called when SMPP server accept message (SUBMIT_SM_RESP).
         May be overridden"""
         logger.warning('Message sent handler (Override me)')
 
+    def FillPDUQueue(self):
+
+        if self.stop_flag.is_set():
+            # unbind on ctrl+c
+            self.pdu_queue.put((None, smpp.make_pdu('unbind', client=self)))
+        else:
+            if self.last_message_time is None or self.last_message_time + self.enqire_time < time.time():
+                self.pdu_queue.put(
+                    (None, smpp.make_pdu('enquire_link', client=self)))
+            if self.pause > time.time():
+                logging.debug(f'pause: {self.pause}')
+                return
+                # enqure link
+            logging.debug('loading messages')
+            messages = self.message_source()
+
+            if messages:
+                for sphone, dphone, message, mid in messages:
+                    # convert to PDU
+                    pdu_list = self.genMessagePDUs(sphone, dphone, message)
+                    # add to queue
+                    if pdu_list:
+                        for l in pdu_list:
+                            self.pdu_queue.put((mid, l))
+                    else:
+                        logging.error(f'empty pdu - {message}')
+                    break
+
     def listen(self, ignore_error_codes=None):
         """Listen for PDUs and act"""
+        mid = None
         while True:
+
             try:
-                self.SendMessages()
+                self.FillPDUQueue()
+                try:
+                    mid, pdu = self.pdu_queue.get(timeout=0.1)
+                    self.send_pdu(pdu)
+                    self.last_message_time = time.time()
+                except Empty:
+                    pass
+
                 try:
                     p = self.read_pdu()
+                    self.last_message_time = time.time()
                 except socket.timeout:
                     logger.debug('Socket timeout, listening again')
-                    p = smpp.make_pdu('enquire_link', client=self)
-                    self.send_pdu(p)
                     continue
 
                 if p.is_error():
@@ -354,9 +452,10 @@ class Client(object):
                     logger.info('Unbind command received')
                     break
                 elif p.command == 'submit_sm_resp':
-                    self.message_sent_handler(pdu=p)
+                    self.message_sent_handler(pdu=p, mid=mid, reason=p.command)
                 elif p.command == 'deliver_sm':
                     self._message_received(p)
+                    self.message_sent_handler(pdu=p, mid=mid, reason=p.command)
                 elif p.command == 'enquire_link':
                     self._enquire_link_received(pdu=p)
                 elif p.command == 'enquire_link_resp':
@@ -369,6 +468,11 @@ class Client(object):
                         and e.args[1] in ignore_error_codes:
                     logging.warning('(%d) %s. Ignored.' %
                                     (e.args[1], e.args[0]))
+                    if self.message_fail_handler:
+                        self.message_fail_handler(f"{p.command} {e.args[1]}",
+                                                  mid, e.args[1])
+                    if e.args[1] == consts.SMPP_ESME_RTHROTTLED:
+                        self.set_pause()
                 else:
                     raise
 

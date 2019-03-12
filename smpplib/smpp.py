@@ -38,10 +38,8 @@ def parse_pdu(data, **kwargs):
     """Parse binary PDU"""
 
     command = pdu.extract_command(data)
-
     if command is None:
         return None
-
     new_pdu = make_pdu(command, **kwargs)
     new_pdu.parse(data)
 

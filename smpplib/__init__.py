@@ -25,3 +25,4 @@ from . import pdu
 from . import command
 from . import client
 from . import exceptions
+from . import client_sync

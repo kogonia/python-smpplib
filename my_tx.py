@@ -1,18 +1,24 @@
-#!/usr/bin/python3
+#! /usr/bin/python3
+# coding=utf8
 
-import re
-import smpplib
-import settings
-import sys
+import pytz
+import datetime
+from time import sleep
+
 import logging
+import sys
+
+import smpplib.gsm
+import smpplib.client
+import smpplib.consts
+import settings
+
 
 logging.basicConfig(
     filename='/var/log/sms/msg.log',
     format='%(asctime)s - %(levelname)s: %(message)s',
     datefmt='%d.%m.%Y %H:%M:%S',
     level=logging.INFO)
-
-MSG=None
 
 if (len(sys.argv)>1):
     PHONES=str(sys.argv[1])
@@ -21,26 +27,39 @@ client = None
 
 try:
     client = smpplib.client.Client(settings.sms_host, settings.sms_port)
+    client.set_message_sent_handler(
+        lambda pdu: sys.stdout.write('sent {} {}\n'.format(pdu.sequence, pdu.message_id)))
+
     client.connect()
-    print(client.state) 
     try:
         client.bind_transmitter(system_id=settings.sms_id, password=settings.sms_pass)
-        for PHONE in PHONES.split("\r\n"):
-            DST_ADDR = PHONE.strip()
-            print("Phone number = ", DST_ADDR, " length = ",len(DST_ADDR),"<br />")
-            if MSG:
-                logging.info('Text: %s', MSG)
+
+        parts, encoding_flag, msg_type_flag = smpplib.gsm.make_parts(MSG)
+        logging.info('Text: %s', MSG)
+        for part in parts:
+            LIST_PHONES=PHONES.split("\\n")
+            for PHONE in LIST_PHONES:
+                DST_ADDR = PHONE.strip()
                 if len(DST_ADDR) == 11:
-                    logging.info('Send to %s', DST_ADDR)
-                    client.send_message(source_addr='SMPP',
-                        source_addr_ton=5,
-                        source_addr_npi=0,
-                        dest_addr_ton=1,
-                        dest_addr_npi=1,
+                    pdu = client.send_message(
+                        source_addr_ton=smpplib.consts.SMPP_TON_ALNUM,
+                        source_addr_npi=smpplib.consts.SMPP_NPI_UNK,
+                        source_addr="SMPP",
+
+                        dest_addr_ton=smpplib.consts.SMPP_TON_INTL,
+                        dest_addr_npi=smpplib.consts.SMPP_NPI_ISDN,
                         destination_addr=DST_ADDR,
-                        short_message=MSG.encode('cp1251'))
+                        short_message=part,
+
+                        data_coding=encoding_flag,
+                        esm_class=msg_type_flag,
+                        registered_delivery=True,
+                    )
+                    
+            logging.info('Send to %s', LIST_PHONES)
+            logging.info('=====================')
+            sleep(0.05)
     finally:
-#        print ("==client.state====", client.state)
         if client.state in [smpplib.consts.SMPP_CLIENT_STATE_BOUND_TX]:
             try:
                 client.unbind()
@@ -51,7 +70,4 @@ try:
                     pass
 finally:
     if client:
-#        print ("==client.state====", client.state)
         client.disconnect()
-#        print ("==client.state====", client.state)
-
