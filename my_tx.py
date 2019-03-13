@@ -36,11 +36,12 @@ try:
 
         parts, encoding_flag, msg_type_flag = smpplib.gsm.make_parts(MSG)
         logging.info('Text: %s', MSG)
-        for part in parts:
-            LIST_PHONES=PHONES.split("\\n")
-            for PHONE in LIST_PHONES:
-                DST_ADDR = PHONE.strip()
-                if len(DST_ADDR) == 11:
+
+        LIST_PHONES=PHONES.split("\\n")
+        for PHONE in LIST_PHONES:
+            DST_ADDR = PHONE.strip()
+            if len(DST_ADDR) == 11:
+                for part in parts:
                     pdu = client.send_message(
                         source_addr_ton=smpplib.consts.SMPP_TON_ALNUM,
                         source_addr_npi=smpplib.consts.SMPP_NPI_UNK,
@@ -55,10 +56,9 @@ try:
                         esm_class=msg_type_flag,
                         registered_delivery=True,
                     )
-                    
-            logging.info('Send to %s', LIST_PHONES)
-            logging.info('=====================')
-            sleep(0.05)
+            sleep(0.05)                    
+        logging.info('Send to %s', LIST_PHONES)
+        logging.info('=====================')
     finally:
         if client.state in [smpplib.consts.SMPP_CLIENT_STATE_BOUND_TX]:
             try:
